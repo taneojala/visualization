@@ -1,0 +1,109 @@
+#!/user/bin/python         #is pointing to the location of the python interpreter (the same code runs on Win and U*x)
+#
+
+import pandas as pd
+# instead of pylab as pl the following two namespaces:
+import matplotlib.pyplot as pp
+import numpy as np
+import zipfile as zip
+import shutil
+import requests
+import sys as sys
+
+class GetData:
+    'Class to fetch, unzip and put file''s content into a data frame'
+
+    def __init__(self, url=None, file=None):
+        self.url = url
+        self.filename = file
+        self.getFile()
+        self.unZipFile()
+        self.makeDataFrame()
+        
+    # generic function to get a (binary) file via http and copy it to the local filesystem
+    def getFile(self):
+        resp = requests.get(self.url + self.filename, stream=True)
+        if resp.status_code == 200:
+            with open(self.filename, 'wb') as zipfile:
+                shutil.copyfileobj(resp.raw, zipfile)
+                self.zipfile = zipfile
+        else: 
+            sys.exit(sys.exc_info()[0])
+            
+    # generic function to extract a RIO zip file to the local filesystem
+    def unZipFile(self):
+        with zip.ZipFile(self.filename) as RIOzip:
+            RIOzip.extract(self.filename.replace('.zip', '-data.csv'))
+
+    # generic function to create a pandas object of a RIO dataset 
+    def makeDataFrame(self):
+        self.dataframe = pd.read_csv(self.filename.replace('.zip', '-data.csv'))
+
+class PrepareDataFrame:
+    'Class to prepare the dataframe based on further usage needs, e.g. visualization'
+
+    def __init__(self, dataframe, **kwargs):
+        try:
+            self.year = int(kwargs.get('TIME_PERIOD', 2015))
+            self.allDataframe = dataframe
+            self.df = []
+            
+            # first graph's dataframe directly from the file contents
+            self.df.append( self.allDataframe[ (self.allDataframe['UNIT'] == 'PC_GDP') & (self.allDataframe['SECTFUND'] == 'TOTAL') & 
+                                            (self.allDataframe['TIME_PERIOD'] == self.year) & 
+                                            (self.allDataframe['GEO'] != 'EU28') & (self.allDataframe['GEO'] != 'EA19')] )
+            
+            # second graph's dataframe constructed specifically (content, cardinality the same as first one's)
+            EUavg = self.allDataframe[ (self.allDataframe['UNIT'] == 'PC_GDP') & (self.allDataframe['SECTFUND'] == 'TOTAL') & 
+                                            (self.allDataframe['TIME_PERIOD'] == self.year) & (self.allDataframe['GEO'] == 'EU28') ]['OBS_VALUE']
+            EUavg = EUavg.values.tolist()[0]
+            avgValues = []
+            for val in range(len(self.df[0]['OBS_VALUE'].values.tolist())): 
+                avgValues.append(['EU28', EUavg])
+            labels = ['GEO','OBS_VALUE']
+            dataf = pd.DataFrame.from_records(avgValues, columns=labels)
+            self.df.append( dataf )
+        except:
+            print("Unexpected error:", sys.exc_info()[0])
+            
+class Radar:
+    
+    def __init__(self, dataframes, fig, titles=[], labels=[], rotation=0, rect=None):
+        if rect is None:  rect = [0.05, 0.05, 0.95, 0.95]
+
+        titles = dataframes.df[0]['GEO']
+        
+        self.n = len(titles)
+        self.angles = np.arange(0, 360, 360.0/self.n)
+        self.axes = [fig.add_axes(rect, projection="polar")]
+
+        self.ax = self.axes[0]
+        self.ax.set_thetagrids(self.angles, labels=titles, fontsize=14)
+
+        for ax in self.axes[1:]:
+            ax.patch.set_visible(False)
+            ax.grid("off")
+            ax.xaxis.set_visible(False)
+
+        self.plot(dataframes.df[0]['OBS_VALUE'].values.tolist(),  "-", lw=4, color="b", alpha=0.4, label="Total BERD, percentage of GDP")
+        self.plot(dataframes.df[1]['OBS_VALUE'].values.tolist(),  "--", lw=3, color="r", alpha=.5, label="Average BERD in EU28, percentage of GDP")
+        self.ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.10), fancybox=True, shadow=True, ncol=4)
+
+    def plot(self, values, *args, **kw):
+        angle = np.deg2rad(np.r_[self.angles, self.angles[0]])
+        values = np.r_[values, values[0]]
+        self.ax.plot(angle, values, *args, **kw)
+    
+def main():
+    x = GetData('https://rio.jrc.ec.europa.eu/datasets/', 'RIO_BERD_BY_SOURCE.zip')
+    dataframes = PrepareDataFrame(x.dataframe, TIME_PERIOD='2012', GEO='FI')   # GEO kwarg is here on as example - is not used
+    
+    if len(dataframes.df[0]['OBS_VALUE'].values.tolist()) > 0:
+        fig = pp.figure(figsize=(9, 9))  # drawing area 9x9 inches
+        radar = Radar(dataframes, fig)
+        pp.show()
+    else: 
+        print('No data found')
+        
+if __name__ == "__main__":  main()
+    
